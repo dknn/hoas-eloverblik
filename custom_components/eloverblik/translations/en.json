@@ -10,5 +10,19 @@
             }
         },
         "title": "Eloverblik"
+    },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spot costs",
+        "description": "Optional estimate of spot energy costs, excluding VAT, tariffs, taxes and supplier fees. Hourly consumption is matched to historical prices. Select Disabled to keep consumption only.",
+        "data": {
+          "spot_price_area": "Spot price area"
+        }
+      }
+    },
+    "error": {
+      "invalid_price_area": "Choose Disabled, DK1 or DK2."
     }
+  }
 }

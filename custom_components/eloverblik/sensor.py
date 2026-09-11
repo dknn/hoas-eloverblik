@@ -1,7 +1,8 @@
 """Platform for Eloverblik sensor integration."""
 from datetime import datetime, timedelta
 import logging
-import pytz
+import math
+from homeassistant.util import dt as dt_util
 from homeassistant.const import UnitOfEnergy
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import (
@@ -25,8 +26,9 @@ from homeassistant.util import Throttle
 from homeassistant.util.unit_conversion import EnergyConverter
 from homeassistant.helpers.entity import Entity
 from pyeloverblik.models import TimeSeries
-from .__init__ import HassEloverblik, MIN_TIME_BETWEEN_UPDATES
+from . import HassEloverblik, MIN_TIME_BETWEEN_UPDATES
 from .const import DOMAIN, CURRENCY_KRONER_PER_KILO_WATT_HOUR
+from .spot_cost import EloverblikSpotCost
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +43,13 @@ async def async_setup_entry(hass: HomeAssistant, config: ConfigEntry, async_add_
     for hour in range(1, 25):
         sensors.append(EloverblikEnergy(f"Eloverblik Energy {hour-1}-{hour}", 'hour', eloverblik, hour))
     sensors.append(EloverblikTariff("Eloverblik Tariff Sum", eloverblik))
-    sensors.append(EloverblikStatistic(eloverblik))
+    energy_statistic = EloverblikStatistic(eloverblik)
+    sensors.append(energy_statistic)
+    area = config.options.get("spot_price_area", "disabled")
+    if area in ("DK1", "DK2"):
+        sensors.append(EloverblikSpotCost(
+            energy_statistic, eloverblik.get_metering_point(), area, config.entry_id
+        ))
 
     async_add_entities(sensors)
 
@@ -208,7 +216,7 @@ class EloverblikTariff(Entity):
         self._data.update_tariffs()
 
         self._data_hourly_tariff_sums = [self._data.get_tariff_sum_hour(h) for h in range(1, 25)]
-        self._state = self._data_hourly_tariff_sums[datetime.now().hour]
+        self._state = self._data_hourly_tariff_sums[dt_util.now().hour]
 
 
 class EloverblikStatistic(SensorEntity):
@@ -224,72 +232,84 @@ class EloverblikStatistic(SensorEntity):
         self._attr_unique_id = f"{hass_eloverblik.get_metering_point()}-statistic"
         self._hass_eloverblik = hass_eloverblik
 
-    async def async_will_remove_from_hass(self) -> None:
-        """Cleanup callback to remove statistics when deleting entity"""
-        await get_instance(self.hass).async_clear_statistics([self.entity_id])
-
     @Throttle(MIN_TIME_BETWEEN_UPDATES)
     async def async_update(self):
         """Continually update history"""
-        last_stat = await self._get_last_stat(self.hass)
+        await self._update_data()
 
-        if last_stat is not None and pytz.utc.localize(datetime.now()) - pytz.utc.localize(datetime.utcfromtimestamp(last_stat["start"])) < timedelta(days=1):
-            # If less than 1 day since last record, don't pull new data.
-            # Data is available at the earliest a day after.
-            return
-
-        self.hass.async_create_task(self._update_data(last_stat))
-
-    async def _update_data(self, last_stat: StatisticData):
-        if last_stat is None:
-            # if none import from last january
-            from_date = datetime(datetime.today().year-1, 1, 1)
-        else:
-            # Next day at noon (eloverblik.py will strip time)
-            from_date = pytz.utc.localize(datetime.utcfromtimestamp(last_stat["start"]) + timedelta(hours=13))
-
-        data = await self.hass.async_add_executor_job(
-            self._hass_eloverblik.get_hourly_data,
-            from_date,
-            datetime.now())
-
-        if data is not None:
-            await self._insert_statistics(data, last_stat)
-        else:
-            _LOGGER.debug("None data was returned from Eloverblik")
+    async def _update_data(self):
+        today = dt_util.now().date()
+        from_date = datetime(today.year-1, 1, 1)
+        to_date = datetime.combine(today + timedelta(days=1), datetime.min.time())
+        window_start = dt_util.as_utc(dt_util.start_of_local_day(from_date))
+        # At most one recorder row per hour, plus one older row to anchor the
+        # cumulative sum. This preserves history before the reconciliation window.
+        count = int((dt_util.utcnow() - window_start).total_seconds() // 3600) + 2
+        existing = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, count, self.entity_id, True, {"sum"}
+        )
+        data = {}
+        batch_start = from_date
+        while batch_start < to_date:
+            batch_end = min(batch_start + timedelta(days=365), to_date)
+            batch = await self.hass.async_add_executor_job(
+                self._hass_eloverblik.get_hourly_data, batch_start, batch_end
+            )
+            if batch is None:
+                # Keep the complete previous history on a failed request.
+                return
+            data.update(batch)
+            batch_start = batch_end
+        await self._insert_statistics(data, existing.get(self.entity_id, []), window_start)
 
     async def _insert_statistics(
         self,
         data: dict[datetime, TimeSeries],
-        last_stat: StatisticData):
+        existing: list[StatisticData],
+        window_start: datetime):
 
         statistics : list[StatisticData] = []
+        now = dt_util.utcnow()
+        total = previous_sum = 0.0
+        quantities = {}
+        old_sums = {}
+        for row in sorted(existing, key=lambda row: row["start"]):
+            start = dt_util.utc_from_timestamp(row["start"])
+            value = row["sum"]
+            if value is None or not math.isfinite(value):
+                _LOGGER.warning("Cannot reconcile invalid existing statistics")
+                return
+            if start < window_start:
+                total = value
+            else:
+                quantities[start] = value - previous_sum
+                old_sums[start] = value
+            previous_sum = value
 
-        if last_stat is not None:
-            total = last_stat["sum"]
-        else:
-            total = 0
+        for series in data.values():
+            values = series._metering_data
+            if values is None:
+                continue
+            first = series.data_date - timedelta(hours=len(values))
+            for hour, quantity in enumerate(values):
+                start = first + timedelta(hours=hour)
+                if start < window_start or start + timedelta(hours=1) > now:
+                    continue
+                if quantity is not None:
+                    if not math.isfinite(quantity):
+                        _LOGGER.warning("Cannot reconcile non-finite statistics")
+                        return
+                    quantities[start] = quantity
 
-        # Sort time series to ensure correct insertion
-        sorted_time_series = sorted(data.values(), key = lambda timeseries : timeseries.data_date)
-
-        for time_series in sorted_time_series:
-            if time_series._metering_data is not None:
-                number_of_hours = len(time_series._metering_data)
-
-                # data_date returned is end of the time series
-                date = time_series.data_date - timedelta(hours=number_of_hours)
-
-                for hour in range(0, number_of_hours):
-                    start = date + timedelta(hours=hour)
-
-                    total += time_series.get_metering_data(hour+1)
-
-                    statistics.append(
-                        StatisticData(
-                            start=start,
-                            sum=total
-                        ))
+        # Missing API points retain known consumption. Unknown gaps get no row;
+        # later hours can progress, and the full window is retried on every poll.
+        for start, quantity in sorted(quantities.items()):
+            total += quantity
+            if not math.isfinite(total):
+                _LOGGER.warning("Cannot reconcile non-finite statistics sum")
+                return
+            if start not in old_sums or abs(total - old_sums[start]) > 1e-9:
+                statistics.append(StatisticData(start=start, sum=total))
 
         metadata = StatisticMetaData(
             name=self._attr_name,
@@ -303,13 +323,3 @@ class EloverblikStatistic(SensorEntity):
 
         if len(statistics) > 0:
             async_import_statistics(self.hass, metadata, statistics)
-
-    async def _get_last_stat(self, hass: HomeAssistant) -> StatisticData:
-        last_stats = await get_instance(hass).async_add_executor_job(
-            get_last_statistics, hass, 1, self.entity_id, True, {"sum"}
-        )
-
-        if self.entity_id in last_stats and len(last_stats[self.entity_id]) > 0:
-            return last_stats[self.entity_id][0]
-        else:
-            return None

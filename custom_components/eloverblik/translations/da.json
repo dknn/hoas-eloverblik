@@ -10,5 +10,19 @@
             }
         },
         "title": "Eloverblik"
+    },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spotomkostninger",
+        "description": "Valgfrit estimat af spotomkostninger uden moms, tariffer, afgifter og elselskabets tillæg. Timeforbruget kobles til historiske priser. Vælg Disabled for kun at hente forbrug.",
+        "data": {
+          "spot_price_area": "Spotprisområde"
+        }
+      }
+    },
+    "error": {
+      "invalid_price_area": "Vælg Disabled, DK1 eller DK2."
     }
+  }
 }

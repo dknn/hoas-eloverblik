@@ -3,10 +3,12 @@ import asyncio
 import logging
 import sys
 import json
-from datetime import timedelta, datetime
+import math
+from datetime import timedelta, datetime, timezone
 import requests
 import voluptuous as vol
 from homeassistant.util import Throttle
+from homeassistant.util import dt as dt_util
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from pyeloverblik.models import TimeSeries
@@ -37,8 +39,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN][entry.entry_id] = HassEloverblik(refresh_token, metering_point)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(async_options_updated))
 
     return True
+
+
+async def async_options_updated(hass: HomeAssistant, entry: ConfigEntry):
+    """Reload only this entry when optional spot pricing is changed."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
@@ -83,36 +91,66 @@ class HassEloverblik:
             try:
                 return round(self._day_data.get_metering_data(hour), 3)
             except IndexError:
-                self._day_data.get_metering_data(23)
-                _LOGGER.info(f"Unable to get data for hour {hour}. If siwtch to daylight saving day this is not an error.")
-                return 0
+                _LOGGER.debug("No metering data for hour %s", hour)
+                return None
         else:
             return None
 
-    @Throttle(MIN_TIME_BETWEEN_UPDATES)
     def get_hourly_data(self, from_date: datetime, to_date: datetime) -> dict[datetime, TimeSeries]:
-        """Used to get hourly data for a meter between two dates."""
+        """Fetch one bounded batch; the sensor throttles the complete update."""
 
         try:
+            days = (to_date.date() - from_date.date()).days
+            if not 0 < days <= 365:
+                raise ValueError("Invalid statistics request interval")
+            lower = dt_util.as_utc(dt_util.start_of_local_day(from_date))
+            upper = dt_util.as_utc(dt_util.start_of_local_day(to_date))
             raw_data = self._client.get_time_series(self._metering_point, from_date, to_date)
             if raw_data.status == 200:
                 json_response = json.loads(raw_data.body)
-                parsed = self._client._parse_result(json_response)
+                # Preserve point positions: a partial day must not be shifted
+                # backwards from the period's end by the dependency's parser.
+                parsed = {}
+                for result in json_response.get("result") or []:
+                    document = result.get("MyEnergyData_MarketDocument") or {}
+                    for series in document.get("TimeSeries") or []:
+                        for period in series.get("Period") or []:
+                            if period["resolution"] != "PT1H":
+                                raise ValueError("Expected hourly statistics from Eloverblik")
+                            start = datetime.fromisoformat(period["timeInterval"]["start"])
+                            end = datetime.fromisoformat(period["timeInterval"]["end"])
+                            if start.tzinfo is None or end.tzinfo is None:
+                                raise ValueError("Missing time zone in statistics")
+                            start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+                            if not lower <= start < end <= upper or any(
+                                value.minute or value.second or value.microsecond for value in (start, end)
+                            ):
+                                raise ValueError("Statistics period outside requested hourly interval")
+                            hours = int((end - start).total_seconds() // 3600)
+                            for point in period.get("Point") or []:
+                                position = int(point["position"])
+                                if not 1 <= position <= hours:
+                                    raise ValueError("Invalid statistics point position")
+                                quantity = point.get("out_Quantity.quantity")
+                                if point.get("out_Quantity.quality") in ("A02", "A05"):
+                                    quantity = None
+                                if quantity is not None:
+                                    quantity = float(quantity)
+                                    if not math.isfinite(quantity):
+                                        raise ValueError("Non-finite statistics quantity")
+                                hour_end = start + timedelta(hours=position)
+                                if hour_end in parsed:
+                                    raise ValueError("Duplicate statistics point")
+                                parsed[hour_end] = TimeSeries(
+                                    200, hour_end, [quantity],
+                                )
                 return parsed
             else:
-                _LOGGER.warn(f"Error from eloverblik while getting historic data: {raw_data.status} - {raw_data.body}")
-        except requests.exceptions.HTTPError as he:
-            message = None
-            if he.response.status_code == 401:
-                message = f"Unauthorized error while accessing eloverblik.dk. Wrong or expired refresh token?"
-            else:
-                e = sys.exc_info()[1]
-                message = f"Exception: {e}"
-
-            _LOGGER.warn(message)
-        except: 
-            e = sys.exc_info()[1]
-            _LOGGER.warn(f"Exception: {e}")
+                _LOGGER.warning("Eloverblik statistics request failed with status %s", raw_data.status)
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:
+            # Do not include response bodies or exception text containing private data.
+            _LOGGER.warning("Unable to retrieve Eloverblik statistics (%s)", type(error).__name__)
+        return None
 
     def get_data_date(self):
         if self._day_data != None:

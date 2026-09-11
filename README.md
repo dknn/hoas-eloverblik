@@ -174,9 +174,79 @@ the recorder will try to write it to the statistics.
 
 But the entity will have a valid long-term statistic.
 
-The statistic will continually be updateed daily.
+Statistics are checked at most once per hour. Each update rechecks the current
+and previous calendar year in requests of at most 365 days, including completed
+hours of today when Eloverblik makes them available. This also repairs late or
+corrected measurements within that period; older statistics are retained but
+are not automatically rechecked.
+
+Missing measurements do not block later hours and are not inserted as zero.
+Previously imported values are retained when a response omits them. The totals
+therefore represent the known consumption and may change when gaps are filled.
+Reloading or removing the integration does not delete its long-term statistics.
 
 > **_NOTE:_**  The data will be delayed between 1 and 3 days, depending on your local grid operator (DSO).
+
+### Optional historical spot costs
+
+In **Settings → Devices & services → Eloverblik → Configure**, choose DK1
+(west of the Great Belt) or DK2 (east of the Great Belt). The default is Disabled.
+This creates **Eloverblik Spot Cost DK1/DK2 (estimated, excl. VAT)** in the same
+integration. No additional Home Assistant integration is needed.
+
+The statistic is **net spot energy cost only**. It excludes VAT, grid tariffs,
+electricity taxes, supplier supplements, subscriptions and fees. It is not an
+electricity bill. The integration still imports consumption independently if
+the price service is unavailable or this option is disabled.
+
+Costs use the historical price for each consumption hour. Before October 2025
+the source is Energinet's `Elspotprices` dataset; thereafter it is
+`DayAheadPrices`. Prices in DKK/MWh are divided by 1000. With four quarter-hour
+prices and only hourly consumption, the four prices are averaged. This assumes
+even consumption within the hour, so the result is labelled **estimated**.
+Negative spot prices are preserved. Actual quarter-hour consumption is not
+supported by this version.
+
+Once its `status` attribute says `ready`, edit the grid consumption source in
+**Settings → Dashboards → Energy**, choose the option to use an entity tracking
+total costs, and select the new spot-cost statistic. Do not select the current
+tariff or current spot price to price delayed historical measurements.
+The plugin does not modify your energy dashboard configuration automatically.
+The statistic entity itself has no current numeric state: the historical sums
+are imported directly into recorder, just like the existing energy statistic.
+
+The current and previous calendar year are recalculated, including corrections
+to consumption. Existing older cost history is retained. A zero baseline is
+inserted immediately before the first priced hour so its cost is included too.
+Missing or invalid prices prevent that update from writing any new cost sums;
+existing sums remain untouched and can be stale until recovery. The `status`
+attribute is `missing_prices`, `rate_limited`, `update_failed`, or `waiting_for_consumption`
+until a complete calculation succeeds. This cannot turn a day without
+consumption data into a known bill or force the standard dashboard to display
+an explicit missing-data warning.
+
+Prices are fetched from `https://api.energidataservice.dk` over verified HTTPS,
+without sending Eloverblik tokens or meter identifiers. Requests are limited to
+one calendar month (up to 4000 records) and have timeouts. A first backfill may
+need about 24 requests. Per-entry/per-area caches in Home Assistant `.storage`
+survive reloads; recent prices are refreshed daily and older months every
+30 days. Missing required intervals may be retried after one hour. Successful
+cost calculations run at most hourly; failures are retried after five minutes.
+HTTP 429 pauses according to `Retry-After` (at least 30 seconds), keeping the
+months already fetched so the next attempt continues instead of starting over.
+Changing DK1/DK2 creates a separate cost statistic, preventing the two areas'
+histories from being mixed. Disabling the option retains historical statistics;
+remove or change its selection in the energy dashboard if you no longer use it.
+
+Sources: [Eloverblik API](https://api.eloverblik.dk/CustomerApi/index.html),
+[Energi Data Service API guide](https://www.energidataservice.dk/guides/api-guides).
+
+### Local regression tests
+
+Run `python -m unittest discover -s tests`. The tests exercise the production
+classes with simulated Home Assistant and API boundaries, including a stateful
+recorder double. They do not require credentials or network access. They do not
+replace testing with Home Assistant's real recorder, lifecycle and polling.
 
 Below are two examples of UI yaml configuration to display the values.
 

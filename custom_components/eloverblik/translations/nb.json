@@ -10,5 +10,19 @@
             }
         },
         "title": "Eloverblik"
+    },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spotkostnader",
+        "description": "Valgfritt estimat av spotkostnader uten moms, nettleie, avgifter og leverandørpåslag. Timeforbruk kobles til historiske priser. Velg Disabled for bare forbruk.",
+        "data": {
+          "spot_price_area": "Spotprisområde"
+        }
+      }
+    },
+    "error": {
+      "invalid_price_area": "Velg Disabled, DK1 eller DK2."
     }
+  }
 }
