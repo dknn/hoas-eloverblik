@@ -1,21 +1,21 @@
 {
   "domain": "eloverblik",
   "name": "Eloverblik",
-  "version": "0.6.2",
+  "codeowners": [
+    "@dknn"
+  ],
   "config_flow": true,
-  "iot_class": "cloud_polling",
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/dknn/hoas-eloverblik",
+  "homekit": {},
+  "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/dknn/hoas-eloverblik/issues",
   "requirements": [
     "pyeloverblik==0.4.4"
   ],
   "ssdp": [],
   "zeroconf": [],
-  "homekit": {},
-  "dependencies": [
-    "recorder"
-  ],
-  "codeowners": [
-    "@dknn"
-  ]
+  "version": "0.6.2"
 }
