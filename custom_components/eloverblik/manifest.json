@@ -16,6 +16,6 @@
     "pyeloverblik==0.4.4"
   ],
   "ssdp": [],
-  "zeroconf": [],
-  "version": "0.6.2"
+  "version": "0.6.2",
+  "zeroconf": []
 }
