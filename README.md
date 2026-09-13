@@ -1,16 +1,14 @@
-# eloverblik
+# HOAS Eloverblik
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/)
 
-The `eloverblik` component is a Home Assistant custom component for monitoring your electricity data from [eloverblik.dk](https://eloverblik.dk).
+HOAS Eloverblik is a community-maintained continuation of the original [homeassistant-eloverblik](https://github.com/JonasPed/homeassistant-eloverblik) integration. It is a Home Assistant custom component for monitoring electricity data from [eloverblik.dk](https://eloverblik.dk).
+
+The integration keeps the Home Assistant domain `eloverblik` so existing installations have the best possible migration path. It is not affiliated with or endorsed by the original author or Eloverblik.dk.
 
 **Important information**
 
-I no longer actively develop this component. There are mainly two reasons for that. 
-1. Eloverblik API is know for being unstable and slow. There is nothing I can do about that.
-2. I no longer actively use this integration my self.
-
-PR's are still welcome and will get reviewed and merged!
+This repository is a fork of the original project. The upstream project is no longer actively developed, so this repository is used for ongoing maintenance and improvements. Please report issues and submit pull requests here.
 
 ## Installation
 
@@ -27,7 +25,7 @@ PR's are still welcome and will get reviewed and merged!
   1. Ensure that [HACS](https://hacs.xyz/) is installed.
   2. Search for and install the `eloverblik` integration through HACS.
      * Or use this shortcut  
-     [![Open your Home Assistant instance and open a the Eloverblik repository inside the Home Assistant Community Store](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=JonasPed&repository=homeassistant-eloverblik&category=integration)
+     [![Open your Home Assistant instance and open the HOAS Eloverblik repository inside the Home Assistant Community Store](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=dknn&repository=hoas-eloverblik&category=integration)
   3. Restart Home Assistant (Settings → ⋮ (the top-right 3-dot menu) → Restart Home Assistant → Restart Home Assistant → Restart).
   4. [Configure](#configuration) Eloverblik through Settings → Devices & Services → Add Integration.
      * Or use this shortcut  
